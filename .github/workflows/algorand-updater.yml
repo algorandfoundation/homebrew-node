@@ -64,10 +64,7 @@ jobs:
       - name: Test formula installation
         if: steps.compare_versions.outputs.mismatch == 'true'
         run: |
-          brew install --build-from-source ./Formula/algorand.rb --formula 2>&1
-          brew --prefix algorand --installed
-          "$(brew --prefix algorand)/bin/algod" -v
-          brew uninstall algorand
+          ./test.sh
 
       - name: Commit and push changes
         if: steps.compare_versions.outputs.mismatch == 'true'
