@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -e
+
 TAP=algorandfoundation/homebrew-node
 
 brew tap-new $TAP
