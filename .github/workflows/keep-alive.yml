@@ -1,0 +1,36 @@
+name: Keep Repo Alive
+
+on:
+  schedule:
+    - cron: "0 0 */30 * *" # Runs every 30 days to keep the repo active
+  workflow_dispatch: # Allows manual triggering
+
+jobs:
+  keepalive:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      
+      - name: Update repository maintenance timestamp
+        run: |
+          # Create a maintenance log entry
+          echo "# Repository Maintenance Log" > .github/MAINTENANCE.md
+          echo "" >> .github/MAINTENANCE.md
+          echo "Last automated maintenance check: $(date -u)" >> .github/MAINTENANCE.md
+          echo "Status: Repository monitoring active" >> .github/MAINTENANCE.md
+          
+      - name: Commit maintenance update
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add .github/MAINTENANCE.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update maintenance timestamp"
+            git push
+          fi
