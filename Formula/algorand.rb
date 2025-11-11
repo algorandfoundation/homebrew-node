@@ -1,8 +1,8 @@
 class Algorand < Formula
   desc "Installs Algorand node software and runs it as a launchctl service"
   homepage "https://github.com/algorand/go-algorand"
-  url "https://github.com/algorand/go-algorand/releases/download/v4.3.0-stable/node_stable_darwin-universal_4.3.0.tar.gz"
-  sha256 "b419b34d50958d62f4e8632b0d77c4091bef071e53e751f0080e3b5e65a8fcb0"
+  url "https://github.com/algorand/go-algorand/releases/download/v4.4.1-stable/node_stable_darwin-universal_4.4.1.tar.gz"
+  sha256 "af189964beb038b91fc217ad9cad6ef2d7e7805ca8f143d9b800ee8879ad1b0a"
 
   depends_on :macos
 
