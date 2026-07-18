@@ -64,7 +64,8 @@ jobs:
       - name: Test formula installation
         if: steps.compare_versions.outputs.mismatch == 'true'
         run: |
-          ./test.sh
+          set -o pipefail
+          ./test.sh 2>&1 | tee test_output.log
 
       - name: Commit and push changes
         if: steps.compare_versions.outputs.mismatch == 'true'
@@ -76,3 +77,18 @@ jobs:
           git add Formula/algorand.rb
           git commit -m "Update Algorand version to ${{ steps.fetch_tag.outputs.latest_tag }}"
           git push
+
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          if [ -f test_output.log ]; then
+            error_message=$(head -c 300 test_output.log)
+          else
+            error_message="Workflow failed before the formula test step; see the run logs for details."
+          fi
+          text=$(printf ':x: *Algorand Homebrew updater failed*\n*Error (first 300 chars):*\n```%s```\n*Run:* %s' "$error_message" "$run_url")
+          payload=$(jq -n --arg text "$text" '{text: $text}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
