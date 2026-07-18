@@ -89,6 +89,6 @@ jobs:
           else
             error_message="Workflow failed before the formula test step; see the run logs for details."
           fi
-          text=$(printf ':x: *Algorand Homebrew updater failed*\n*Error (first 300 chars):*\n```%s```\n*Run:* %s' "$error_message" "$run_url")
+          text=$(printf '<!channel> :x: *Algorand Homebrew updater failed*\n*Error (first 300 chars):*\n```%s```\n*Run:* %s' "$error_message" "$run_url")
           payload=$(jq -n --arg text "$text" '{text: $text}')
           curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
