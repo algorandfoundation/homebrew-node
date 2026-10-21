@@ -2,19 +2,24 @@ name: Check and Update Algorand Version
 
 on:
   schedule:
-    - cron: "0 0,12 * * *" # Runs at 00:00 and 12:00 UTC every day
+    - cron: "3-59/10 * * * *" # Every 10 minutes, offset from :00 when GitHub's scheduler is busiest
   workflow_dispatch: # Allows manual triggering of the workflow
+  repository_dispatch: # Lets the go-algorand release pipeline trigger an update directly
+    types: [go-algorand-release]
 
 jobs:
-  check-and-update-algorand-version:
-    runs-on: macos-15
-    concurrency:
-      group: algorand-updater
-      cancel-in-progress: false
+  # Cheap version check on Linux so frequent polling doesn't tie up macOS runners.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      mismatch: ${{ steps.compare_versions.outputs.mismatch }}
+      latest_tag: ${{ steps.fetch_tag.outputs.latest_tag }}
 
     steps:
       - name: Checkout homebrew-tap repository
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: Formula
 
       - name: Get version from algorand.rb
         id: get_version
@@ -27,8 +32,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          response=$(curl -s -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/algorand/go-algorand/tags")
-          latest_tag=$(echo "$response" | jq -r '[.[] | select(.name | contains("-stable"))][0].name' | sed 's/^v//; s/-stable$//')
+          response=$(curl -fsS --retry 3 --retry-all-errors -H "Authorization: token $GITHUB_TOKEN" "https://api.github.com/repos/algorand/go-algorand/tags")
+          latest_tag=$(echo "$response" | jq -r '[.[] | select(.name | contains("-stable"))][0].name // empty' | sed 's/^v//; s/-stable$//')
           if [ -z "$latest_tag" ]; then
             echo "Error: Failed to fetch the latest stable tag."
             exit 1
@@ -48,34 +53,72 @@ jobs:
             echo "mismatch=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Notify Slack on failure
+        if: failure()
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: |
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          text=$(printf ':warning: *Algorand Homebrew version check failed*\n*Run:* %s' "$run_url")
+          payload=$(jq -n --arg text "$text" '{text: $text}')
+          curl -sS -X POST -H 'Content-type: application/json' --data "$payload" "$SLACK_WEBHOOK_URL"
+
+  update:
+    needs: check
+    if: needs.check.outputs.mismatch == 'true'
+    runs-on: macos-15
+    concurrency:
+      group: algorand-updater
+      cancel-in-progress: false
+
+    steps:
+      # Check out the branch tip, not the triggering commit: a run queued behind
+      # another update must see that update's commit.
+      - name: Checkout homebrew-tap repository
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Re-check version on latest main
+        id: recheck
+        run: |
+          latest_tag="${{ needs.check.outputs.latest_tag }}"
+          if grep -q "releases/download/v${latest_tag}-stable/" Formula/algorand.rb; then
+            echo "Formula already at $latest_tag; nothing to do."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "needed=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Fetch checksum for latest release
-        if: steps.compare_versions.outputs.mismatch == 'true'
+        if: steps.recheck.outputs.needed == 'true'
         id: fetch_checksum
         run: |
-          checksum=$(curl -sL "https://github.com/algorand/go-algorand/releases/download/v${{ steps.fetch_tag.outputs.latest_tag }}-stable/node_stable_darwin-universal_${{ steps.fetch_tag.outputs.latest_tag }}.tar.gz" | shasum -a 256 | awk '{print $1}')
+          set -o pipefail
+          checksum=$(curl -fsSL --retry 3 "https://github.com/algorand/go-algorand/releases/download/v${{ needs.check.outputs.latest_tag }}-stable/node_stable_darwin-universal_${{ needs.check.outputs.latest_tag }}.tar.gz" | shasum -a 256 | awk '{print $1}')
           echo "checksum=$checksum" >> "$GITHUB_OUTPUT"
 
       - name: Update algorand.rb
-        if: steps.compare_versions.outputs.mismatch == 'true'
+        if: steps.recheck.outputs.needed == 'true'
         run: |
-          sed -i '' "s|url \"https://github.com/algorand/go-algorand/releases/download/v[0-9.]*-stable/node_stable_darwin-universal_[0-9.]*.tar.gz\"|url \"https://github.com/algorand/go-algorand/releases/download/v${{ steps.fetch_tag.outputs.latest_tag }}-stable/node_stable_darwin-universal_${{ steps.fetch_tag.outputs.latest_tag }}.tar.gz\"|" Formula/algorand.rb
+          sed -i '' "s|url \"https://github.com/algorand/go-algorand/releases/download/v[0-9.]*-stable/node_stable_darwin-universal_[0-9.]*.tar.gz\"|url \"https://github.com/algorand/go-algorand/releases/download/v${{ needs.check.outputs.latest_tag }}-stable/node_stable_darwin-universal_${{ needs.check.outputs.latest_tag }}.tar.gz\"|" Formula/algorand.rb
           sed -i '' "s/sha256 \".*\"/sha256 \"${{ steps.fetch_checksum.outputs.checksum }}\"/" Formula/algorand.rb
 
       - name: Test formula installation
-        if: steps.compare_versions.outputs.mismatch == 'true'
+        if: steps.recheck.outputs.needed == 'true'
         run: |
           set -o pipefail
           ./test.sh 2>&1 | tee test_output.log
 
       - name: Commit and push changes
-        if: steps.compare_versions.outputs.mismatch == 'true'
+        if: steps.recheck.outputs.needed == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
           git add Formula/algorand.rb
-          git commit -m "Update Algorand version to ${{ steps.fetch_tag.outputs.latest_tag }}"
+          git commit -m "Update Algorand version to ${{ needs.check.outputs.latest_tag }}"
           git push
 
       - name: Notify Slack on failure
